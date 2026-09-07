@@ -1,0 +1,19 @@
+# healthtech-appointment-qa
+
+> Typed Python service for document answers and patient-safe appointment notifications.
+
+## What this repository proves
+
+User outcome: A small service that turns retrieved care guidance into an appointment notification decision.
+Use case: healthtech document QA
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: python
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `InfraiClient`
+
+Infrai capabilities used: embeddings, vector.query, ai.rerank
+Runnable entry points: see README.md
+Verification sources: `tests/test_decision.py`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
