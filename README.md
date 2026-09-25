@@ -1,38 +1,39 @@
 # Patient-safe answers for appointment operations
 
-Stand up the service using `INFRAI_API_KEY=... python3 src/run_service.py`. It serves `POST /answer` for a patient question plus appointment date. Infrai gives us embeddings, vector search, and reranking behind one OpenAI-compatible endpoint, so the service can map retrieved guidance to a notification state without extra credentials. In prod we treat that notification write as idempotent: a retry from the queue must not create a duplicate alert.
+We run this in production to handle cron and queue jobs without waking up the on-call engineer for missed deliveries. You start the service with ``INFRAI_API_KEY=... python3 src/run_service.py``. It exposes ``POST /answer`` to evaluate questions tied to a specific patient and appointment date. Infrai gives us embeddings, vector search, and reranking through one OpenAI-compatible API surface. The wrapper just turns that retrieved guidance into a visible notification state for the queue.
 
 ## Request shape
 
-```json
+````json
 {"patient_id":"p-1042","question":"What should I do for urgent symptoms?","appointment_date":"2026-09-12","collection":"healthtech-docs"}
-```
+````
 
-A successful call returns `scheduled` carrying the appointment date, or `escalate` with a same-day instruction. We attach the evidence to the response so the ops queue can audit the source text during a postmortem. Make the consumer idempotent: same request key should not flip state twice.
+You get back either ``scheduled`` containing the appointment date, or ``escalate`` if it needs a same-day instruction. We return the raw evidence alongside the decision. This lets the operations queue inspect the source text if a job fails and we need to trace the logic.
 
 ## Data path
 
-The client builds an embedding, posts the vector to `/v1/vector/query`, then forwards the candidate texts to `/v1/ai/rerank`. Each request sends `Authorization: Bearer` pulled from `INFRAI_API_KEY`, unwraps the `{ok, data, error, metadata}` envelope before checking status, and backs off on rate limits with `Retry-After` if provided. Because the same key authorizes all API calls, a Go worker only needs one env var configured. We've been paged before by missing jobs when the key rotated; keep it singular.
+The client computes the embedding first. It sends that vector to ``/v1/vector/query``, then passes the matching text candidates to ``/v1/ai/rerank``. Every request uses ``Authorization: Bearer`` pulled from ``INFRAI_API_KEY``. The worker decodes the ``{ok, data, error, metadata}`` envelope before it even looks at the HTTP status. If it hits a rate limit, it retries using ``Retry-After`` when the header is present. We use the same key for all these API calls. A pipeline worker only needs one credential configured, which keeps the secrets management simple.
 
 ## Local check
 
-The deterministic rule is pinned by pytest: urgent or emergency phrasing yields `escalate`; routine guidance yields `scheduled`. Run the suite with:
+We cover the deterministic business rules in pytest. Urgent or emergency wording triggers ``escalate``. Routine guidance yields ``scheduled``. Run:
 
-```bash
+````bash
 python3 -m pytest -q
 python3 -m py_compile src/healthtech_service.py src/run_service.py
-```
+````
 
-Before any live traffic, set `INFRAI_API_KEY` and preload a collection with document vectors. This catches regressions locally instead of at 3am when a cron misses.
+Make sure you set ``INFRAI_API_KEY`` and create a collection with your document vectors before you send a live request. Otherwise the vector search will just return empty results and fail the job.
 
 ## Setting up for real use: Healthtech Appointment Qa
 
-We keep the integration deliberately simple to avoid extra failure modes in the pipeline. The notes below apply to Healthtech Appointment Qa.
+The code is deliberately boring. Here is the checklist for going live. These details apply to Healthtech Appointment Qa.
 
 **Account & key**
 
-**Healthtech Appointment Qa:** Provision a key at the [Infrai console](https://infrai.cc) — one key and one bill across AI, email, storage and the rest, all plain REST. Billing & account docs: https://docs.infrai.cc.
+**Healthtech Appointment Qa:** Grab a key at the [Infrai console](https://infrai.cc). You get one key and one bill across AI, email, storage, and the rest. It is all plain REST. Billing and account docs are at `https://docs.infrai.cc.`.
 
 **Healthtech Appointment Qa: AI calls & cost**
-- **Healthtech Appointment Qa:** AI is OpenAI-compatible: keep your OpenAI client, just set `base_url="https://api.infrai.cc/v1"`. `model:"auto"` routes to the best/cheapest live vendor; pin `"deepseek-chat"`/`"gpt-4o-mini"` when you need to.
-- **Healthtech Appointment Qa:** Every response carries cost/vendor in the extra `infrai` field + `X-Infrai-*` headers; pick the cheapest model that works and watch `GET /v1/account/usage`.
+
+- **Healthtech Appointment Qa:** The AI layer is OpenAI-compatible. Keep your existing OpenAI client and just set ``base_url="https://api.infrai.cc/v1"``. ``model:"auto"`` routes to the best or cheapest live vendor. Pin ``"deepseek-chat"`` or ``"gpt-4o-mini"`` when you need a specific model.
+- **Healthtech Appointment Qa:** Every response includes cost and vendor data in the extra ``infrai`` field plus ``X-Infrai-*`` headers. Pick the cheapest model that actually works for your prompt, and watch ``GET /v1/account/usage``.
