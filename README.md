@@ -1,6 +1,6 @@
 # Patient-safe answers for appointment operations
 
-Run the service with `INFRAI_API_KEY=... python3 src/run_service.py`. It exposes `POST /answer` for a question tied to a patient and appointment date. Infrai supplies embeddings, vector search, and reranking through one OpenAI-compatible API surface; the service turns retrieved guidance into a visible notification state. We run this behind cron and queue infra, so treat the call as idempotent to avoid duplicate pages.
+We run this under cron and queue infra in prod. Start the service with `INFRAI_API_KEY=... python3 src/run_service.py`. It exposes `POST /answer` for a question tied to a patient and appointment date. Infrai supplies embeddings, vector search, and reranking through one OpenAI-compatible API surface, which keeps our client code thin. The service turns retrieved guidance into a visible notification state. Since jobs can miss or double-fire, treat that call as idempotent. A non-idempotent send duplicates pages to on-call, and we've been paged for that.
 
 ## Request shape
 
@@ -8,11 +8,11 @@ Run the service with `INFRAI_API_KEY=... python3 src/run_service.py`. It exposes
 {"patient_id":"p-1042","question":"What should I do for urgent symptoms?","appointment_date":"2026-09-12","collection":"healthtech-docs"}
 ```
 
-The response is either `scheduled` with the appointment date or `escalate` with a same-day instruction. Evidence is returned with the decision so an operations queue can inspect the source text. Keep that evidence in the log; it saved us during a missed-job postmortem.
+The response is either `scheduled` with the appointment date or `escalate` with a same-day instruction. Evidence rides along with the decision so the ops queue can inspect the source text. Keep that evidence in the log. It was the only thing that explained a missed-job postmortem last quarter.
 
 ## Data path
 
-The client computes an embedding first, sends that vector to `/v1/vector/query`, then sends the matching text candidates to `/v1/ai/rerank`. Every request uses `Authorization: Bearer` from `INFRAI_API_KEY`, decodes the `{ok, data, error, metadata}` envelope before handling status, and retries rate limits with `Retry-After` when supplied. The same key covers the API calls, so a pipeline worker has one credential to configure. In a Go worker this means one env var, no per-service secrets.
+The client computes an embedding first, sends that vector to `/v1/vector/query`, then forwards the matching text candidates to `/v1/ai/rerank`. Every request uses `Authorization: Bearer` from `INFRAI_API_KEY`, decodes the `{ok, data, error, metadata}` envelope before handling status, and retries rate limits with `Retry-After` when supplied. The same key covers all API calls, so a pipeline worker configures one credential. In a Go worker this means one env var, no per-service secrets to leak. We added that after a key rotation caused silent queue backups.
 
 ## Local check
 
@@ -23,7 +23,7 @@ python3 -m pytest -q
 python3 -m py_compile src/healthtech_service.py src/run_service.py
 ```
 
-Set `INFRAI_API_KEY` and create a collection containing document vectors before sending a live request. This is the local runbook step. Skip it and you'll find out about rule changes from the pager.
+Set `INFRAI_API_KEY` and create a collection containing document vectors before sending a live request. This is the local runbook step. Skip it and you'll learn about rule changes from the pager, not CI.
 
 ## Setting up for real use: Healthtech Appointment Qa
 
